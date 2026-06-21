@@ -1,0 +1,626 @@
+// ==UserScript==
+// @name         Gag.gg & Roblox Continuous Loop (Enhanced)
+// @namespace    http://tampermonkey.net/
+// @version      2026-06-21
+// @description  Automates voting with counter validation, handles popups, and includes retry logic for deletion.
+// @author       You
+// @match        https://gag.gg/vote/
+// @match        https://gag.gg/profile/
+// @match        https://gag.gg/*
+// @match        https://*.roblox.com/*
+// @grant        unsafeWindow
+// @grant        GM_setValue
+// @grant        GM_getValue
+// @grant        GM_deleteValue
+// @grant        GM_addStyle
+// @grant        GM_xmlhttpRequest
+// @run-at       document-end
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    const win = (typeof unsafeWindow !== 'undefined') ? unsafeWindow : window;
+    const currentUrl = window.location.href;
+
+    const WEBHOOK_KEY = 'discord_webhook_url';
+    const NOTIFICATIONS_KEY = 'discord_notifications_enabled';
+    const WEBHOOK_MODE_KEY = 'discord_webhook_mode';
+
+    let webhookUrl = GM_getValue(WEBHOOK_KEY, '');
+    let notificationsEnabled = GM_getValue(NOTIFICATIONS_KEY, true);
+    let webhookMode = GM_getValue(WEBHOOK_MODE_KEY, 'found');
+
+    function randomDelay(min, max) {
+        return Math.floor(Math.random() * (max - min + 1)) + min;
+    }
+
+    function randomClick(element) {
+        if (!element) return false;
+        const delay = randomDelay(200, 800);
+        setTimeout(() => {
+            element.click();
+        }, delay);
+        return true;
+    }
+
+    GM_addStyle(`
+        #gag-automation-ui {
+            position: fixed;
+            bottom: 20px;
+            left: 20px;
+            z-index: 999999;
+            background: #1a1a2e;
+            color: #eee;
+            padding: 15px 20px;
+            border-radius: 12px;
+            border: 1px solid #2a2a4e;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+            font-family: 'Segoe UI', Roboto, Arial, sans-serif;
+            font-size: 13px;
+            min-width: 280px;
+            max-width: 350px;
+            backdrop-filter: blur(10px);
+            transition: all 0.3s ease;
+        }
+        #gag-automation-ui .ui-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+            cursor: move;
+        }
+        #gag-automation-ui .ui-title {
+            font-weight: 600;
+            color: #8b5cf6;
+            font-size: 14px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        #gag-automation-ui .ui-title .dot {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #22c55e;
+            animation: pulse-dot 2s infinite;
+        }
+        @keyframes pulse-dot {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.3; }
+        }
+        #gag-automation-ui .ui-toggle {
+            cursor: pointer;
+            color: #888;
+            font-size: 11px;
+            background: none;
+            border: none;
+            padding: 2px 8px;
+            border-radius: 4px;
+        }
+        #gag-automation-ui .ui-toggle:hover {
+            background: #2a2a4e;
+            color: #eee;
+        }
+        #gag-automation-ui .ui-body {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        #gag-automation-ui .ui-body.hidden {
+            display: none;
+        }
+        #gag-automation-ui .ui-row {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+        #gag-automation-ui .ui-row input {
+            flex: 1;
+            padding: 6px 10px;
+            border-radius: 6px;
+            border: 1px solid #2a2a4e;
+            background: #0d0d1a;
+            color: #eee;
+            font-size: 12px;
+            outline: none;
+            transition: border 0.2s;
+        }
+        #gag-automation-ui .ui-row input:focus {
+            border-color: #8b5cf6;
+        }
+        #gag-automation-ui .ui-row input::placeholder {
+            color: #555;
+        }
+        #gag-automation-ui .ui-btn {
+            padding: 6px 14px;
+            border-radius: 6px;
+            border: none;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 500;
+            transition: all 0.2s;
+            white-space: nowrap;
+        }
+        #gag-automation-ui .ui-btn-primary {
+            background: #8b5cf6;
+            color: #fff;
+        }
+        #gag-automation-ui .ui-btn-primary:hover {
+            background: #7c3aed;
+            transform: scale(1.02);
+        }
+        #gag-automation-ui .ui-btn-danger {
+            background: #ef4444;
+            color: #fff;
+        }
+        #gag-automation-ui .ui-btn-danger:hover {
+            background: #dc2626;
+        }
+        #gag-automation-ui .ui-btn-success {
+            background: #22c55e;
+            color: #fff;
+        }
+        #gag-automation-ui .ui-btn-success:hover {
+            background: #16a34a;
+        }
+        #gag-automation-ui .ui-btn-test {
+            background: #f59e0b;
+            color: #fff;
+        }
+        #gag-automation-ui .ui-btn-test:hover {
+            background: #d97706;
+        }
+        #gag-automation-ui .ui-status {
+            font-size: 11px;
+            padding: 4px 10px;
+            border-radius: 4px;
+            background: #0d0d1a;
+            color: #888;
+        }
+        #gag-automation-ui .ui-status.connected {
+            color: #22c55e;
+            background: #0d1f0d;
+        }
+        #gag-automation-ui .ui-status.disconnected {
+            color: #ef4444;
+            background: #1f0d0d;
+        }
+        #gag-automation-ui .ui-notif-toggle {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 12px;
+            color: #888;
+            cursor: pointer;
+        }
+        #gag-automation-ui .ui-notif-toggle input[type="checkbox"] {
+            accent-color: #8b5cf6;
+            cursor: pointer;
+        }
+        #gag-automation-ui .ui-mode-select {
+            display: flex;
+            gap: 6px;
+            font-size: 11px;
+        }
+        #gag-automation-ui .ui-mode-select button {
+            padding: 3px 10px;
+            border-radius: 4px;
+            border: 1px solid #2a2a4e;
+            background: #0d0d1a;
+            color: #888;
+            cursor: pointer;
+            font-size: 11px;
+            transition: all 0.2s;
+        }
+        #gag-automation-ui .ui-mode-select button.active {
+            border-color: #8b5cf6;
+            color: #8b5cf6;
+            background: #1a1a3e;
+        }
+        #gag-automation-ui .ui-mode-select button:hover {
+            border-color: #8b5cf6;
+        }
+        #gag-automation-ui .ui-log {
+            max-height: 60px;
+            overflow-y: auto;
+            font-size: 11px;
+            color: #666;
+            background: #0d0d1a;
+            padding: 4px 8px;
+            border-radius: 4px;
+            margin-top: 4px;
+            font-family: monospace;
+            line-height: 1.4;
+        }
+        #gag-automation-ui .ui-log::-webkit-scrollbar {
+            width: 3px;
+        }
+        #gag-automation-ui .ui-log::-webkit-scrollbar-thumb {
+            background: #2a2a4e;
+            border-radius: 3px;
+        }
+        .gag-ui-minimized .ui-body {
+            display: none !important;
+        }
+        .gag-ui-minimized {
+            min-width: auto !important;
+            max-width: 200px !important;
+            padding: 10px 15px !important;
+        }
+    `);
+
+    function sendDiscordNotification(message, color = 0x8b5cf6, important = false) {
+        if (!webhookUrl || !notificationsEnabled) return;
+        if (webhookMode === 'found' && !important) return;
+        try {
+            const payload = {
+                content: null,
+                embeds: [{
+                    title: important ? '⭐ GAG Automation - FOUND!' : '🤖 GAG Automation',
+                    description: message,
+                    color: color,
+                    timestamp: new Date().toISOString(),
+                    footer: {
+                        text: 'gag.gg autofarm'
+                    }
+                }]
+            };
+            GM_xmlhttpRequest({
+                method: 'POST',
+                url: webhookUrl,
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                data: JSON.stringify(payload)
+            });
+        } catch (error) {
+            console.error(error);
+        }
+    }
+
+    function buildUI() {
+        if (document.getElementById('gag-automation-ui')) return;
+
+        const ui = document.createElement('div');
+        ui.id = 'gag-automation-ui';
+        ui.innerHTML = `
+            <div class="ui-header">
+                <div class="ui-title">
+                    <span class="dot"></span>
+                    GAG AutoFarm
+                </div>
+                <button class="ui-toggle" id="gag-ui-toggle">−</button>
+            </div>
+            <div class="ui-body" id="gag-ui-body">
+                <div class="ui-row">
+                    <input type="text" id="gag-webhook-input" placeholder="Discord Webhook URL" value="${webhookUrl}" />
+                    <button class="ui-btn ui-btn-primary" id="gag-webhook-save">Save</button>
+                </div>
+                <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;" id="gag-status-container">
+                    <span class="ui-status ${webhookUrl ? 'connected' : 'disconnected'}" id="gag-webhook-status">
+                        ${webhookUrl ? '✅ Webhook connected' : '❌ No webhook set'}
+                    </span>
+                    <div style="display:flex;gap:4px;" id="gag-action-container">
+                    </div>
+                </div>
+                <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
+                    <div class="ui-notif-toggle">
+                        <input type="checkbox" id="gag-notif-toggle" ${notificationsEnabled ? 'checked' : ''} />
+                        <label for="gag-notif-toggle">Send notifications</label>
+                    </div>
+                    <div class="ui-mode-select">
+                        <button class="ui-mode-btn ${webhookMode === 'all' ? 'active' : ''}" data-mode="all">All</button>
+                        <button class="ui-mode-btn ${webhookMode === 'found' ? 'active' : ''}" data-mode="found">⭐ Found Only</button>
+                    </div>
+                </div>
+                <div class="ui-log" id="gag-ui-log">
+                    Ready...
+                </div>
+            </div>
+        `;
+        document.body.appendChild(ui);
+        
+        setupUIEventListeners();
+        updateUI();
+    }
+
+    function setupUIEventListeners() {
+        document.getElementById('gag-ui-toggle').addEventListener('click', function() {
+            const body = document.getElementById('gag-ui-body');
+            const isHidden = body.classList.toggle('hidden');
+            this.textContent = isHidden ? '+' : '−';
+        });
+
+        document.getElementById('gag-webhook-save').addEventListener('click', function() {
+            const input = document.getElementById('gag-webhook-input');
+            const url = input.value.trim();
+            if (url && url.startsWith('https://discord.com/api/webhooks/')) {
+                webhookUrl = url;
+                GM_setValue(WEBHOOK_KEY, url);
+                updateUI();
+                addLog('✅ Webhook saved!');
+                sendDiscordNotification('🔗 Webhook connected!', 0x22c55e, true);
+            } else {
+                addLog('❌ Invalid Discord webhook URL');
+            }
+        });
+
+        document.getElementById('gag-notif-toggle').addEventListener('change', function() {
+            notificationsEnabled = this.checked;
+            GM_setValue(NOTIFICATIONS_KEY, this.checked);
+            addLog(`Notifications ${this.checked ? 'enabled' : 'disabled'}`);
+        });
+
+        document.querySelectorAll('.ui-mode-btn').forEach(btn => {
+            btn.addEventListener('click', function() {
+                const mode = this.dataset.mode;
+                webhookMode = mode;
+                GM_setValue(WEBHOOK_MODE_KEY, mode);
+                document.querySelectorAll('.ui-mode-btn').forEach(b => b.classList.remove('active'));
+                this.classList.add('active');
+                addLog(`Mode: ${mode === 'all' ? 'All' : '⭐ Found only'}`);
+            });
+        });
+    }
+
+    function updateUI() {
+        const status = document.getElementById('gag-webhook-status');
+        const actionContainer = document.getElementById('gag-action-container');
+        const input = document.getElementById('gag-webhook-input');
+        
+        if (!status || !actionContainer) return;
+
+        actionContainer.innerHTML = '';
+
+        if (webhookUrl) {
+            status.textContent = '✅ Webhook connected';
+            status.className = 'ui-status connected';
+            
+            const testBtn = document.createElement('button');
+            testBtn.className = 'ui-btn ui-btn-test';
+            testBtn.id = 'gag-webhook-test';
+            testBtn.textContent = '📨 Test';
+            testBtn.addEventListener('click', function() {
+                addLog('📨 Sending test...');
+                sendDiscordNotification('🧪 Test notification!', 0xf59e0b, true);
+                setTimeout(() => { addLog('✅ Test sent!'); }, 1000);
+            });
+
+            const clearBtn = document.createElement('button');
+            clearBtn.className = 'ui-btn ui-btn-danger';
+            clearBtn.id = 'gag-webhook-clear';
+            clearBtn.textContent = 'Clear';
+            clearBtn.addEventListener('click', function() {
+                webhookUrl = '';
+                GM_deleteValue(WEBHOOK_KEY);
+                updateUI();
+                addLog('🗑️ Webhook cleared');
+            });
+
+            actionContainer.appendChild(testBtn);
+            actionContainer.appendChild(clearBtn);
+        } else {
+            status.textContent = '❌ No webhook set';
+            status.className = 'ui-status disconnected';
+        }
+        input.value = webhookUrl;
+        document.querySelectorAll('.ui-mode-btn').forEach(btn => {
+            btn.classList.toggle('active', btn.dataset.mode === webhookMode);
+        });
+    }
+
+    function addLog(message) {
+        const log = document.getElementById('gag-ui-log');
+        if (!log) return;
+        const time = new Date().toLocaleTimeString();
+        log.innerHTML += `\n[${time}] ${message}`;
+        log.scrollTop = log.scrollHeight;
+        const lines = log.innerHTML.split('\n');
+        if (lines.length > 20) {
+            log.innerHTML = lines.slice(-20).join('\n');
+        }
+    }
+
+    function notify(event, details = '', important = false) {
+        const messages = {
+            'vote_start': '🌱 Starting vote...',
+            'vote_complete': '✅ Vote complete!',
+            'vote_stalled': '⚠️ Vote stalled!',
+            'delete_start': '🗑️ Deleting...',
+            'delete_complete': '✅ Deleted!',
+            'login_start': '🔑 Logging in...',
+            'auth_complete': '✅ Auth complete!',
+            'loop_complete': '🔄 Loop complete!',
+            'continue_clicked': '▶️ Continue clicked',
+            'confirm_clicked': '✅ Confirm clicked',
+            'error': `❌ Error: ${details}`
+        };
+        const msg = messages[event] || `ℹ️ ${event}`;
+        addLog(msg);
+        sendDiscordNotification(msg, event === 'error' ? 0xef4444 : 0x8b5cf6, important || event === 'error');
+    }
+
+    win.confirm = function() {
+        return true;
+    };
+
+    setTimeout(buildUI, 1000);
+
+    setInterval(() => {
+        const jackpotBtn = document.querySelector('button[data-jackpot-ok]');
+        if (jackpotBtn) {
+            jackpotBtn.click();
+        }
+    }, 5000);
+
+    if (currentUrl.includes('?deleted=1')) {
+        notify('delete_complete');
+        setTimeout(() => {
+            window.location.href = 'https://gag.gg/api/auth/roblox/login';
+        }, 1000);
+        return;
+    }
+
+    if (currentUrl.includes('?signed_in=1')) {
+        notify('auth_complete');
+        setTimeout(() => {
+            window.location.href = 'https://gag.gg/vote/';
+        }, 1000);
+        return;
+    }
+
+    if (currentUrl.includes('gag.gg/vote/')) {
+        notify('vote_start');
+        setTimeout(() => {
+            const maxClicks = 20;
+            const baseDelay = 600;
+            let lastValue = -1;
+            let stallCount = 0;
+            const maxStallCount = 8;
+
+            const clickInterval = setInterval(() => {
+                const meter = document.querySelector('div[data-swipe-meter]');
+                const button = document.querySelector('button[data-swipe-like]');
+                if (!meter || !button) return;
+
+                const currentValue = parseInt(meter.getAttribute('aria-valuenow'), 10) || 0;
+                if (currentValue === lastValue) {
+                    stallCount++;
+                    if (stallCount >= maxStallCount) {
+                        clearInterval(clickInterval);
+                        notify('vote_stalled');
+                        setTimeout(() => {
+                            window.location.href = 'https://gag.gg/profile/';
+                        }, 1000);
+                        return;
+                    }
+                    if (stallCount >= 3) {
+                        randomClick(button);
+                    }
+                } else {
+                    stallCount = 0;
+                    if (currentValue < maxClicks) {
+                        const clickDelay = randomDelay(400, 900);
+                        setTimeout(() => {
+                            button.click();
+                        }, clickDelay);
+                        lastValue = currentValue;
+                    }
+                }
+                if (currentValue >= maxClicks) {
+                    clearInterval(clickInterval);
+                    notify('vote_complete');
+                    setTimeout(() => {
+                        window.location.href = 'https://gag.gg/profile/';
+                    }, randomDelay(3000, 6000));
+                }
+            }, baseDelay);
+        }, 2000);
+    } else if (currentUrl.includes('gag.gg/profile/')) {
+        setTimeout(() => {
+            const voteLink = document.querySelector('a[data-launch-vote]');
+            if (voteLink) {
+                notify('loop_complete');
+                randomClick(voteLink);
+                return;
+            }
+            let deleteAttempts = 0;
+            const maxDeleteRetries = 4;
+            function attemptDeletion() {
+                const deleteButton = document.querySelector('button[data-pf-delete]');
+                if (deleteButton && deleteAttempts < maxDeleteRetries) {
+                    deleteAttempts++;
+                    if (deleteAttempts === 1) notify('delete_start');
+                    deleteButton.click();
+                    setTimeout(() => {
+                        const postCheckDeleteBtn = document.querySelector('button[data-pf-delete]');
+                        if (postCheckDeleteBtn && deleteAttempts < maxDeleteRetries) {
+                            attemptDeletion();
+                        } else {
+                            notify('delete_complete');
+                            window.location.href = 'https://gag.gg/api/auth/roblox/login';
+                        }
+                    }, randomDelay(3000, 6000));
+                } else {
+                    notify('login_start');
+                    window.location.href = 'https://gag.gg/api/auth/roblox/login';
+                }
+            }
+            attemptDeletion();
+        }, 2000);
+    } else if (currentUrl.includes('roblox.com')) {
+        let continueClicked = false;
+        let confirmClicked = false;
+
+        function handleContinueButton() {
+            if (continueClicked) return;
+            const continueBtn = document.querySelector('button.MuiButton-containedSecondary');
+            if (continueBtn && continueBtn.textContent.includes('Continue')) {
+                const isDisabled = continueBtn.disabled || continueBtn.classList.contains('Mui-disabled');
+                if (!isDisabled) {
+                    continueClicked = true;
+                    const delay = randomDelay(300, 1200);
+                    setTimeout(() => {
+                        continueBtn.click();
+                        notify('continue_clicked');
+                    }, delay);
+                }
+            }
+        }
+
+        function handleConfirmButton() {
+            if (confirmClicked) return;
+            const confirmBtn = document.querySelector('button[data-testid="permission-request-action-confirm"]');
+            if (confirmBtn) {
+                const isDisabled = confirmBtn.disabled || confirmBtn.classList.contains('Mui-disabled');
+                if (!isDisabled) {
+                    confirmClicked = true;
+                    const delay = randomDelay(400, 1500);
+                    setTimeout(() => {
+                        confirmBtn.click();
+                        notify('confirm_clicked');
+                        notify('auth_complete');
+                        setTimeout(() => {
+                            window.location.href = 'https://gag.gg/?signed_in=1';
+                        }, randomDelay(1500, 3000));
+                    }, delay);
+                }
+            }
+        }
+
+        const observer = new MutationObserver(() => {
+            handleContinueButton();
+            handleConfirmButton();
+        });
+        observer.observe(document.body, {
+            childList: true,
+            subtree: true,
+            attributes: true,
+            attributeFilter: ['class', 'disabled', 'aria-disabled']
+        });
+
+        setInterval(() => {
+            handleContinueButton();
+            handleConfirmButton();
+        }, randomDelay(400, 1000));
+
+        setTimeout(() => {
+            if (!continueClicked) {
+                const btn = document.querySelector('button.MuiButton-containedSecondary');
+                if (btn && btn.textContent.includes('Continue')) {
+                    btn.click();
+                    continueClicked = true;
+                }
+            }
+            if (!confirmClicked) {
+                const btn = document.querySelector('button[data-testid="permission-request-action-confirm"]');
+                if (btn) {
+                    btn.click();
+                    confirmClicked = true;
+                }
+            }
+        }, randomDelay(35000, 45000));
+    }
+})();
